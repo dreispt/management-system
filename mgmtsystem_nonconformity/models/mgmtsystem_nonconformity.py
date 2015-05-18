@@ -19,25 +19,10 @@
 #
 ##############################################################################
 
-from openerp import models, api, fields, netsvc, exceptions, _
-
-from openerp.tools import (
-    DEFAULT_SERVER_DATETIME_FORMAT as DATETIME_FORMAT,
-    DEFAULT_SERVER_DATE_FORMAT as DATE_FORMAT,
-)
+from openerp import models, api, fields, netsvc
+from openerp.tools import DEFAULT_SERVER_DATE_FORMAT as DATE_FORMAT
 
 import time
-
-
-_STATES = [
-    ('draft', _('Draft')),
-    ('analysis', _('Analysis')),
-    ('pending', _('Pending Approval')),
-    ('open', _('In Progress')),
-    ('done', _('Closed')),
-    ('cancel', _('Cancelled')),
-]
-_STATES_DICT = dict(_STATES)
 
 
 class MgmtsystemNonconformity(models.Model):
@@ -49,20 +34,14 @@ class MgmtsystemNonconformity(models.Model):
     _order = "date desc"
     _track = {
         'field': {
-            'mgmtsystem_nonconformity.subtype_analysis': (
-                lambda s, c, u, o, ctx=None: o["state"] == "analysis"
-            ),
-            'mgmtsystem_nonconformity.subtype_pending': (
-                lambda s, c, u, o, ctx=None: o["state"] == "pending"
-            ),
+            'mgmtsystem_nonconformity.mt_stage': (
+                lambda s, c, u, o, ctx=None: True),
         },
     }
 
-    def _state_name(self):
-        res = dict()
-        for o in self:
-            res[o.id] = _STATES_DICT.get(o.state, o.state)
-        return res
+    @api.model
+    def _get_default_stage(self):
+        return self.stage_id.get_default_state()
 
     name = fields.Char('Name')
 
@@ -112,17 +91,12 @@ class MgmtsystemNonconformity(models.Model):
         'Procedure',
     )
     description = fields.Text('Description', required=True)
+    stage_id = fields.Many2one(
+        'mgmtsystem.nonconformity.stage', 'Stage',
+        default=_get_default_stage, index=True)
     state = fields.Selection(
-        _STATES,
-        'State',
-        readonly=True,
-        default="draft",
-        track_visibility='onchange',
-    )
-    state_name = fields.Char(
-        compute='_state_name',
-        string='State Description',
-    )
+        related='stage_id.state', string='Stage State',
+        store=True, index=True)
     system_id = fields.Many2one('mgmtsystem.system', 'System')
 
     # 2. Root Cause Analysis
@@ -232,155 +206,9 @@ class MgmtsystemNonconformity(models.Model):
         )
 
     @api.multi
-    def wkf_analysis(self):
-        """Change state from draft to analysis"""
-        return self.write({
-            'state': 'analysis',
-            'analysis_date': None,
-            'analysis_user_id': None}
-        )
-
-    @api.multi
-    def action_sign_analysis(self):
-        """Sign-off the analysis"""
-        self.ensure_one()
-        if self.state != 'analysis':
-            raise exceptions.ValidationError(
-                _('This action can only be done in the Analysis state.')
-            )
-        if self.analysis_date:
-            raise exceptions.ValidationError(
-                _('Analysis is already approved.')
-            )
-        if not self.analysis:
-            raise exceptions.ValidationError(
-                _('Please provide an analysis before approving.')
-            )
-        self.write({
-            'analysis_date': time.strftime(DATETIME_FORMAT),
-            'analysis_user_id': self._uid,
-        })
-        self.message_post(
-            body='%s <b>%s</b>' % (self.verbose_name, _('Analysis Approved'))
-        )
-        return True
-
-    @api.multi
-    def wkf_review(self):
-        """Change state from analysis to pending approval"""
-        for o in self:
-            if not o.analysis_date:
-                raise exceptions.ValidationError(
-                    _('Analysis must be performed before submitting to '
-                      'approval.')
-                )
-        return self.write({
-            'state': 'pending',
-            'actions_date': None,
-            'actions_user_id': None}
-        )
-
-    @api.multi
-    def action_sign_actions(self):
-        """Sign-off the action plan"""
-        self.ensure_one()
-        if self.state != 'pending':
-            raise exceptions.ValidationError(
-                _('This action can only be done in the Pending for Approval '
-                  'state.')
-            )
-        if self.actions_date:
-            raise exceptions.ValidationError(
-                _('Action plan is already approved.')
-            )
-        if not self.analysis_date:
-            raise exceptions.ValidationError(
-                _('Analysis approved before the review confirmation.')
-            )
-        self.write({
-            'actions_date': time.strftime(DATETIME_FORMAT),
-            'actions_user_id': self._uid,
-        })
-        self.message_post(
-            body='%s <b>%s</b>' % (
-                self.verbose_name, _('Action Plan Approved')
-            )
-        )
-        return True
-
-    @api.multi
-    def wkf_open(self):
-        """Change state from pending approval to in progress, and Open
-        the related actions
-        """
-        self.ensure_one()
-        if not self.actions_date:
-            raise exceptions.ValidationError(
-                _('Action plan must be approved before opening.')
-            )
-        if (self.immediate_action_id and
-                self.immediate_action_id.stage_id.is_starting):
-            self.immediate_action_id.case_open()
-        for action in self.action_ids:
-            if action.stage_id.is_starting:
-                action.case_open()
-        return self.write({
-            'state': 'open',
-            'evaluation_date': False,
-            'evaluation_user_id': False,
-        })
-
-    @api.one
-    def action_sign_evaluation(self):
-        """Sign-off the effectiveness evaluation"""
-        if self.state != 'open':
-            raise exceptions.ValidationError(
-                _('This action can only be done in the In Progress state.')
-            )
-        self.write({
-            'evaluation_date': time.strftime(DATETIME_FORMAT),
-            'evaluation_user_id': self._uid,
-        })
-        self.message_post(
-            body='%s <b>%s</b>' % (
-                self.verbose_name, _('Effectiveness Evaluation Approved')
-            )
-        )
-
-    @api.multi
-    def wkf_cancel(self):
-        """Change state to cancel"""
-        return self.write({'state': 'cancel'})
-
-    @api.multi
-    def wkf_close(self):
-        """Change state from in progress to closed"""
-        self.ensure_one()
-
-        if (self.immediate_action_id and
-                not self.immediate_action_id.stage_id.is_ending):
-            raise exceptions.ValidationError(
-                _('Immediate action from analysis has not been closed.')
-            )
-        if any(i for i in self.action_ids if not i.stage_id.is_ending):
-            raise exceptions.ValidationError(
-                _('Not all actions have been closed.')
-            )
-        if not self.evaluation_date:
-            raise exceptions.ValidationError(
-                _('Effectiveness evaluation must be performed before closing.')
-            )
-        return self.write({'state': 'done'})
-
-    @api.multi
     def case_reset(self):
         """Reset to Draft and restart the workflow"""
         wf_service = netsvc.LocalService("workflow")
         for nc in self:
             wf_service.trg_create(self._uid, self._name, nc.id, self._cr)
-        return self.write({
-            'state': 'draft',
-            'analysis_date': None, 'analysis_user_id': None,
-            'actions_date': None, 'actions_user_id': None,
-            'evaluation_date': None, 'evaluation_user_id': None,
-        })
+        return self.write({'state': self.stage_id.state_to_state('draft')})

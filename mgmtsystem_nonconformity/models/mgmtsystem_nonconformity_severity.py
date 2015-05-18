@@ -23,7 +23,6 @@ from openerp import models, fields
 
 
 class MgmtsystemNonconformitySeverity(models.Model):
-
     """Nonconformity Severity - Critical, Major, Minor, Invalid, ..."""
 
     _name = "mgmtsystem.nonconformity.severity"

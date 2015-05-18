@@ -23,6 +23,7 @@ from . import (
     mgmtsystem_nonconformity_cause,
     mgmtsystem_nonconformity_origin,
     mgmtsystem_nonconformity_severity,
+    mgmtsystem_nonconformity_stage,
     mgmtsystem_nonconformity,
     mgmtsystem_action,
 )

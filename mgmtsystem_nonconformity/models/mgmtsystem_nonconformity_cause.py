@@ -23,7 +23,6 @@ from openerp import models, fields, api, exceptions, _
 
 
 class MgmtsystemNonconformityCause(models.Model):
-
     """Cause of the nonconformity of the management system."""
 
     _name = "mgmtsystem.nonconformity.cause"
